@@ -1,38 +1,69 @@
 import re
-
 import requests
 from bs4 import BeautifulSoup
-
 from parseAndAddCalendar import parse
 
 
-def main():
-    url = "https://www.ufc.com/events"
-    response = requests.get(url)
+def get_all_event_links():
+    BASE_URL = "https://www.ufc.com/events"
+    response = requests.get(BASE_URL)
     soup = BeautifulSoup(response.content, "html.parser")
-    links = [link.get('href') for link in soup.find('div', class_='l-container').find_all("a")]
-    goodLinks = []
-    # if '/event/' in link and 'https' not in link
-    for link in links:
-        if re.search(r'/ufc-\d{3}', link):
-            parse(f'https://www.ufc.com{link}', numberedEvent=True)
-            # goodLinks.append(link)
-        if '/event/' in link:
-            if 'https' not in link:
-                goodLinks.append(link)
 
-    links = list(set([url[:-7] + link for link in links]))
+    links = set()
+    for a in soup.find('details', id='events-list-upcoming').find_all('h3', class_="c-card-event--result__headline"):
+        href = a.find('a')['href']
+
+        if re.search(r'/ufc-\d{3}', href):
+            try:
+                parse(BASE_URL[:-len('/events')] + href, numberedEvent=True)
+            except Exception as e:
+                print(f"  [ERROR] Could not parse numbered event {href}: {e}")
+        else:
+            links.add(href)
+
+    links = [BASE_URL[:-len('/events')] + link for link in sorted(links)]
 
     for link in links:
         try:
-            status = requests.get(link).status_code
-            if status == 200:
-                parse(link)
-            else:
-                print(link)
+            parse(link)
         except Exception as e:
-            print(link, e)
+            print(f"  [ERROR] Could not parse {link}: {e}")
 
 
-if __name__ == "__main__":
-    main()
+get_all_event_links()
+
+# import re
+#
+# import requests
+# from bs4 import BeautifulSoup
+#
+# from parseAndAddCalendar import parse
+#
+#
+# def get_all_event_links():
+#     BASE_URL = "https://www.ufc.com/events"
+#     response = requests.get(BASE_URL)
+#     soup = BeautifulSoup(response.content, "html.parser")
+#
+#     links = set()
+#     for a in soup.find('details', id='events-list-upcoming').find_all('h3', class_="c-card-event--result__headline"):
+#         href = a.find('a')['href']
+#
+#         if re.search(r'/ufc-\d{3}', href):
+#             try:
+#                 parse(BASE_URL[:-len('/events')] + href, numberedEvent=True)
+#             except Exception as e:
+#                 print(f"❌ Error parsing numbered event {href}: {e}")
+#         else:
+#             links.add(href)
+#
+#     links = [BASE_URL[:-len('/events')] + link for link in sorted(links)]
+#
+#     for link in links:
+#         try:
+#             parse(link)
+#         except Exception as e:
+#             print(f"❌ Error parsing {link}: {e}")
+#
+#
+# get_all_event_links()
