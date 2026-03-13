@@ -60,24 +60,34 @@ def parse_fighter(corner_div, rank_div, country_div, image_div):
     country = ""
     country_text_div = country_div.find(class_="c-listing-fight__country-text")
     if country_text_div:
-        country = country_text_div.get_text(strip=True)
-        try:
-            country = coco.convert(names=country, to='ISO3')
-        except ValueError:
-            print(f'Error converting country: {ValueError}')
+        raw_country = country_text_div.get_text(strip=True)
+        if raw_country:  # skip empty strings
+            try:
+                converted = coco.convert(names=raw_country, to='ISO3')
+                # coco returns "not found" string on failure — keep original if so
+                country = converted if converted != "not found" else raw_country
+            except Exception:
+                country = raw_country
+
     image_url = ""
     img = image_div.find("img") if image_div else None
     if img:
         image_url = img.get("src", "")
-        if image_url.startswith("/"):
+        if image_url.startswith("/") and not image_url.startswith("//"):
             image_url = "https://www.ufc.com" + image_url
+
     outcome = None
     outcome_div = corner_div.find(class_="c-listing-fight__outcome")
     if outcome_div:
         outcome = outcome_div.get_text(strip=True) or None
+
+    # Fix URL — only prepend base if it's a relative path
+    if url and url.startswith("/"):
+        url = "https://www.ufc.com" + url
+
     return Fighter(
         name=get_fighter_name(corner_div),
-        url=f"https://www.ufc.com{url}" if url and url.startswith("/") else url,
+        url=url,
         country=country,
         rank=rank,
         image_url=image_url,
@@ -132,21 +142,35 @@ def parse_fight(item, card_section):
 
 
 def parse_broadcast_info(section_soup):
-    time_div = section_soup.find(class_="c-event-fight-card-broadcaster__time")
+    # Try both the section-level and page-level broadcaster time div
+    time_div = (
+            section_soup.find(class_="c-event-fight-card-broadcaster__time tz-change-inner") or
+            section_soup.find(class_="c-event-fight-card-broadcaster__time")
+    )
     broadcaster_anchor = section_soup.find(class_="broadcaster-cta")
     timestamp = time_div.get("data-timestamp") if time_div else None
 
-    # Convert Unix timestamp → local datetime
+    # Some events store it as a data attribute on a child span instead
+    if not timestamp and time_div:
+        child = time_div.find(attrs={"data-timestamp": True})
+        if child:
+            timestamp = child.get("data-timestamp")
+
     start_datetime = None
-    if timestamp:
+    if timestamp and timestamp.strip():
         try:
-            utc_dt = datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
-            start_datetime = utc_dt.astimezone()  # converts to system local time
+            utc_dt = datetime.fromtimestamp(int(timestamp.strip()), tz=timezone.utc)
+            start_datetime = utc_dt.astimezone()
         except (ValueError, TypeError):
             pass
 
     broadcaster = broadcaster_anchor.get_text(strip=True) if broadcaster_anchor else None
     broadcaster_url = broadcaster_anchor.get("href") if broadcaster_anchor else None
+
+    # Fix URL concatenation — don't prepend base if already absolute
+    if broadcaster_url and not broadcaster_url.startswith("http"):
+        broadcaster_url = "https://www.ufc.com" + broadcaster_url
+
     return timestamp, start_datetime, broadcaster, broadcaster_url
 
 
@@ -328,14 +352,25 @@ def fetch_numbered_event_page(url):
     session = requests.Session()
     session.headers.update(HEADERS)
     response = session.get(url)
-
     soup = BeautifulSoup(response.text, "html.parser")
-    fights = []
 
-    # Numbered events render all fights in a single flat section with no card-section IDs.
-    # Try to grab broadcast info from the top-level broadcaster container.
+    # Try section-level first, then fall back to searching the whole page
     timestamp, start_datetime, broadcaster, broadcaster_url = parse_broadcast_info(soup)
 
+    if not start_datetime:
+        # Numbered events sometimes nest the timestamp deeper — search all matching divs
+        for div in soup.find_all(attrs={"data-timestamp": True}):
+            ts = div.get("data-timestamp", "").strip()
+            if ts:
+                try:
+                    utc_dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                    start_datetime = utc_dt.astimezone()
+                    timestamp = ts
+                    break
+                except (ValueError, TypeError):
+                    continue
+
+    fights = []
     for item in soup.find_all(class_="l-listing__item"):
         if not item.find(class_="c-listing-fight"):
             continue
@@ -364,6 +399,5 @@ def parse(EVENT_URL, numberedEvent=False):
         alert_minutes=30,
         assumed_duration_hours=3,
     )
-
 
 # parse()
